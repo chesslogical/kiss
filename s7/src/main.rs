@@ -1,115 +1,230 @@
-use anyhow::{Context, Result};
-use cipher::{BlockEncrypt, generic_array::GenericArray, KeyInit};
+use anyhow::{anyhow, Context, Result};
+use argon2::{Algorithm, Argon2, Params, Version};
+use cipher::{generic_array::GenericArray, BlockEncrypt};
 use clap::Parser;
+use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand::RngCore;
+use rpassword::prompt_password;
 use sha2::Sha512;
-use std::fs::{rename, write, File};
-use std::io::Read;
+use std::fs::{rename, File};
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use threefish::Threefish1024;
+use zeroize::Zeroize;
 
-const MAGIC_HEADER: &[u8] = b"TF1024ENC"; // 9 bytes magic
+type HmacSha512 = Hmac<Sha512>;
+
+const MAGIC: &[u8] = b"TF1024V2";
+const SALT_SIZE: usize = 16;
 const IV_SIZE: usize = 16;
-const TAG_SIZE: usize = 64; // 512-bit HMAC-SHA512 tag
-const HEADER_SIZE: usize = MAGIC_HEADER.len() + IV_SIZE; // 9 + 16 = 25 bytes
-const KEY_FILE: &str = "key.bin"; // Expected key file name
+const TAG_SIZE: usize = 64;
+const CHUNK_SIZE: usize = 1024 * 1024; // 1 MB streaming
 
 #[derive(Parser)]
-#[command(name = "threefish_encrypt", about = "CLI for Threefish-1024 file encryption/decryption with auto-detect, in-place overwrite, and authentication")]
 struct Args {
-    /// File name (in same directory as executable)
     file: String,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    // Get executable directory
+
+    let password = prompt_password("Enter password: ")?;
+    let mut password = password;
+
     let exe_dir = std::env::current_exe()?
         .parent()
-        .context("Failed to get exe dir")?
+        .context("Cannot determine executable directory")?
         .to_path_buf();
 
     let file_path = exe_dir.join(&args.file);
-    let temp_path = exe_dir.join(format!("{}.tmp", file_path.file_name().unwrap().to_str().unwrap()));
-    // Read key from key.bin
-    let key_path = exe_dir.join(KEY_FILE);
-    let mut key_bytes = vec![];
-    File::open(&key_path)
-        .context(format!("Failed to open key file: {}", key_path.display()))?
-        .read_to_end(&mut key_bytes)
-        .context("Failed to read key file")?;
-    if key_bytes.len() != 128 {
-        return Err(anyhow::anyhow!("Key file {} must be exactly 128 bytes", key_path.display()));
-    }
-    let key_array: [u8; 128] = key_bytes.try_into().map_err(|_| anyhow::anyhow!("Key conversion error"))?;
-    // Read input file
-    let mut data = vec![];
-    File::open(&file_path)?.read_to_end(&mut data).context("Failed to read file")?;
-    let (output, is_decrypt) = if data.starts_with(MAGIC_HEADER) {
-        // Decrypt: Extract IV, ciphertext, tag
-        if data.len() < HEADER_SIZE + TAG_SIZE {
-            return Err(anyhow::anyhow!("Invalid encrypted file (too short)"));
-        }
-        let iv_array: [u8; 16] = data[MAGIC_HEADER.len()..HEADER_SIZE].try_into()?;
-        let ciphertext_end = data.len() - TAG_SIZE;
-        let ciphertext = &data[HEADER_SIZE..ciphertext_end];
-        let tag = &data[ciphertext_end..];
-        
-        // Verify MAC
-        let mut mac = <Hmac<Sha512> as KeyInit>::new(GenericArray::from_slice(&key_array));
-        mac.update(MAGIC_HEADER);
-        mac.update(&iv_array);
-        mac.update(ciphertext);
-        mac.verify_slice(tag).map_err(|_| anyhow::anyhow!("MAC verification failed - file tampered or wrong key"))?;
-        
-        // Decrypt
-        (process_ctr(&key_array, &iv_array, ciphertext)?, true)
+    let temp_path = tmp_path(&file_path);
+
+    let mut file = File::open(&file_path)?;
+    let mut magic = [0u8; 8];
+    let is_encrypted = if file.read_exact(&mut magic).is_ok() && magic == MAGIC {
+        true
     } else {
-        // Encrypt: Generate random IV, process, compute MAC, prepend header, append tag
-        let mut iv_array = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut iv_array);
-        let ciphertext = process_ctr(&key_array, &iv_array, &data)?;
-        
-        // Compute MAC
-        let mut mac = <Hmac<Sha512> as KeyInit>::new(GenericArray::from_slice(&key_array));
-        mac.update(MAGIC_HEADER);
-        mac.update(&iv_array);
-        mac.update(&ciphertext);
-        let tag = mac.finalize().into_bytes();
-        
-        let mut output = MAGIC_HEADER.to_vec();
-        output.extend_from_slice(&iv_array);
-        output.extend_from_slice(&ciphertext);
-        output.extend_from_slice(&tag);
-        (output, false)
+        false
     };
-    // Write to temp file
-    write(&temp_path, &output).context("Failed to write temp file")?;
-    // Atomic rename
-    rename(&temp_path, &file_path).context("Failed to rename temp file")?;
-    println!("File {} successfully {}!", file_path.display(), if is_decrypt { "decrypted" } else { "encrypted" });
+
+    drop(file);
+
+    if is_encrypted {
+        decrypt_stream(&password, &file_path, &temp_path)?;
+        println!("File decrypted.");
+    } else {
+        encrypt_stream(&password, &file_path, &temp_path)?;
+        println!("File encrypted.");
+    }
+
+    password.zeroize();
+    rename(&temp_path, &file_path)?;
+
     Ok(())
 }
 
-fn process_ctr(key_array: &[u8; 128], iv_array: &[u8; 16], data: &[u8]) -> Result<Vec<u8>> {
-    // Threefish-1024 instance with key and tweak (IV)
-    let cipher = Threefish1024::new_with_tweak(key_array, iv_array);
-    // CTR mode: Generate keystream, XOR with data
-    let block_size = 128;
-    let num_blocks = (data.len() + block_size - 1) / block_size;
-    let mut output = vec![0u8; data.len()];
+fn tmp_path(path: &PathBuf) -> PathBuf {
+    path.with_extension("tmp")
+}
+
+fn encrypt_stream(password: &str, input: &PathBuf, output: &PathBuf) -> Result<()> {
+    let mut salt = [0u8; SALT_SIZE];
+    let mut iv = [0u8; IV_SIZE];
+    rand::thread_rng().fill_bytes(&mut salt);
+    rand::thread_rng().fill_bytes(&mut iv);
+
+    let (mut enc_key, mut mac_key) = derive_keys(password, &salt)?;
+
+    let mut reader = File::open(input)?;
+    let mut writer = File::create(output)?;
+
+    writer.write_all(MAGIC)?;
+    writer.write_all(&salt)?;
+    writer.write_all(&iv)?;
+
+    let mut mac = <HmacSha512 as Mac>::new_from_slice(&mac_key)?;
+    mac.update(MAGIC);
+    mac.update(&salt);
+    mac.update(&iv);
+
+    let cipher = Threefish1024::new_with_tweak(&enc_key, &iv);
     let mut counter: u64 = 0;
-    for i in 0..num_blocks {
-        let mut ctr_block = [0u8; 128];
-        ctr_block[0..8].copy_from_slice(&counter.to_le_bytes());
-        let mut ctr_generic = GenericArray::from_mut_slice(&mut ctr_block);
-        <Threefish1024 as BlockEncrypt>::encrypt_block(&cipher, &mut ctr_generic);
-        let start = i * block_size;
-        let end = std::cmp::min(start + block_size, data.len());
-        for j in start..end {
-            output[j] = data[j] ^ ctr_block[j - start];
+    let mut buffer = vec![0u8; CHUNK_SIZE];
+
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
         }
-        counter += 1;
+
+        let chunk = &buffer[..read];
+        let encrypted = process_chunk(&cipher, chunk, &mut counter)?;
+
+        mac.update(&encrypted);
+        writer.write_all(&encrypted)?;
     }
+
+    let tag = mac.finalize().into_bytes();
+    writer.write_all(&tag)?;
+
+    enc_key.zeroize();
+    mac_key.zeroize();
+
+    Ok(())
+}
+
+fn decrypt_stream(password: &str, input: &PathBuf, output: &PathBuf) -> Result<()> {
+    let mut reader = File::open(input)?;
+
+    let mut magic = [0u8; 8];
+    reader.read_exact(&mut magic)?;
+    if magic != MAGIC {
+        return Err(anyhow!("Invalid file format"));
+    }
+
+    let mut salt = [0u8; SALT_SIZE];
+    let mut iv = [0u8; IV_SIZE];
+    reader.read_exact(&mut salt)?;
+    reader.read_exact(&mut iv)?;
+
+    let (mut enc_key, mut mac_key) = derive_keys(password, &salt)?;
+
+    let file_len = reader.metadata()?.len() as usize;
+    let header_len = MAGIC.len() + SALT_SIZE + IV_SIZE;
+    let ciphertext_len = file_len - header_len - TAG_SIZE;
+
+    let mut mac = <HmacSha512 as Mac>::new_from_slice(&mac_key)?;
+    mac.update(&magic);
+    mac.update(&salt);
+    mac.update(&iv);
+
+    let cipher = Threefish1024::new_with_tweak(&enc_key, &iv);
+    let mut counter: u64 = 0;
+    let mut remaining = ciphertext_len;
+    let mut buffer = vec![0u8; CHUNK_SIZE];
+    let mut writer = File::create(output)?;
+
+    while remaining > 0 {
+        let to_read = remaining.min(CHUNK_SIZE);
+        reader.read_exact(&mut buffer[..to_read])?;
+
+        mac.update(&buffer[..to_read]);
+
+        let decrypted =
+            process_chunk(&cipher, &buffer[..to_read], &mut counter)?;
+
+        writer.write_all(&decrypted)?;
+        remaining -= to_read;
+    }
+
+    let mut tag = [0u8; TAG_SIZE];
+    reader.read_exact(&mut tag)?;
+
+    mac.verify_slice(&tag)
+        .map_err(|_| anyhow!("Authentication failed"))?;
+
+    enc_key.zeroize();
+    mac_key.zeroize();
+
+    Ok(())
+}
+
+fn derive_keys(password: &str, salt: &[u8]) -> Result<([u8; 128], [u8; 64])> {
+    // Strong production parameters:
+    // 64 MB memory, 3 iterations, parallelism=1
+    let params = Params::new(65536, 3, 1, Some(64))
+        .map_err(|e| anyhow!("Argon2 param error: {e}"))?;
+
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
+    let mut master = [0u8; 64];
+    argon2
+        .hash_password_into(password.as_bytes(), salt, &mut master)
+        .map_err(|e| anyhow!("Argon2 failed: {e}"))?;
+
+    let hk = Hkdf::<Sha512>::new(None, &master);
+
+    let mut enc_key = [0u8; 128];
+    let mut mac_key = [0u8; 64];
+
+    hk.expand(b"threefish-enc", &mut enc_key)
+        .map_err(|_| anyhow!("HKDF enc expand failed"))?;
+    hk.expand(b"threefish-mac", &mut mac_key)
+        .map_err(|_| anyhow!("HKDF mac expand failed"))?;
+
+    master.zeroize();
+
+    Ok((enc_key, mac_key))
+}
+
+fn process_chunk(
+    cipher: &Threefish1024,
+    data: &[u8],
+    counter: &mut u64,
+) -> Result<Vec<u8>> {
+    let block_size = 128;
+    let mut output = vec![0u8; data.len()];
+    let blocks = (data.len() + block_size - 1) / block_size;
+
+    for b in 0..blocks {
+        let mut block = [0u8; 128];
+        block[..8].copy_from_slice(&counter.to_le_bytes());
+
+        let mut ga = GenericArray::from_mut_slice(&mut block);
+        cipher.encrypt_block(&mut ga);
+
+        let start = b * block_size;
+        let end = (start + block_size).min(data.len());
+
+        for i in start..end {
+            output[i] = data[i] ^ block[i - start];
+        }
+
+        *counter = counter
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("Counter overflow"))?;
+    }
+
     Ok(output)
 }

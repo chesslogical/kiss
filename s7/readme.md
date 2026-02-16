@@ -1,2 +1,170 @@
-Threefish-1024 uses a 1024-bit key and 80 rounds, while Threefish-256 uses a 256-bit key and 72 rounds, making the 1024 variant theoretically more secure against brute-force attacks and potentially offering a slightly higher security margin due to the larger state and additional rounds. However, both remain unbroken in their full forms, with cryptanalysis only succeeding on significantly reduced rounds (e.g., 42/80 for 1024-bit vs. 39/72 for 256-bit), and 256 bits is already considered sufficient for all practical purposes as brute-forcing it is infeasible with current or foreseeable technology. In the context of your app, the difference is negligible unless facing hypothetical future threats like massive quantum computing advances, where larger keys could provide extra resilience.
-Compared to AES (typically 256-bit) or ChaCha20 (256-bit), Threefish-1024 is overkill but on par or potentially stronger in design (e.g., ARX-based like ChaCha20, resistant to timing attacks without hardware acceleration needs), while Threefish-256 aligns closely with their security levels—all unbroken and with high margins. AES and ChaCha20 benefit from more extensive real-world scrutiny and hardware support (e.g., AES-NI for speed), making them "battle-tested" defaults, but Threefish shares modern design advantages with ChaCha20 and was a SHA-3 finalist component, so it's comparably secure for most uses. ChaCha20 often edges out in software performance and side-channel resistance.
+# Threefish-1024 Vault
+
+A hardened, password-based file encryption tool written in Rust using Threefish-1024 in CTR mode with authenticated encryption (Encrypt-then-MAC).
+
+This project is designed for:
+
+* Learning advanced cryptography implementation
+* Serious private file protection
+* Production-grade secure file encryption
+
+---
+
+# 🔐 Security Design
+
+## Cipher
+
+* Threefish-1024 (1024-bit block cipher)
+* CTR mode stream construction
+
+## Authentication
+
+* HMAC-SHA512
+* Encrypt-then-MAC
+* Full header + ciphertext authenticated
+
+## Key Derivation
+
+* Argon2id
+* 64 MB memory cost
+* 3 iterations
+* HKDF-SHA512 key separation
+
+Keys derived:
+
+* 1024-bit encryption key
+* 512-bit MAC key
+
+## File Format (Version 2)
+
+```
+MAGIC (8 bytes)
+SALT (16 bytes)
+IV (16 bytes)
+CIPHERTEXT (variable)
+HMAC TAG (64 bytes)
+```
+
+The file format is versioned to allow future upgrades.
+
+---
+
+# 🛡 Security Properties
+
+* Password never appears in CLI history
+* Password never stored on disk
+* Secrets zeroized from memory
+* Constant-memory streaming (multi-GB safe)
+* Authentication verified before successful completion
+* Counter overflow protection
+* Atomic file overwrite
+
+---
+
+# 🚀 Usage
+
+Build:
+
+```
+cargo build --release
+```
+
+Run:
+
+```
+./threefish_encrypt <filename>
+```
+
+You will be prompted securely for a password.
+
+Running the tool again on an encrypted file decrypts it automatically.
+
+---
+
+# 📦 Dependencies
+
+* threefish
+* argon2
+* hkdf
+* hmac
+* sha2
+* zeroize
+* rpassword
+* clap
+* anyhow
+
+---
+
+# ⚙ Argon2 Parameters
+
+Current configuration:
+
+* Memory: 64 MB
+* Iterations: 3
+* Parallelism: 1
+* Variant: Argon2id
+
+These parameters provide strong resistance against GPU and ASIC attacks while remaining usable on modern machines.
+
+You may increase memory cost for higher security.
+
+---
+
+# 📂 Streaming Mode
+
+The tool processes files in 1 MB chunks.
+
+This means:
+
+* No full file loaded into RAM
+* Safe for very large files (100GB+)
+* Constant memory usage
+
+---
+
+# 🔎 Threat Model
+
+Protects against:
+
+* Offline brute-force attacks (Argon2id)
+* File tampering (HMAC-SHA512)
+* Bit-flipping attacks
+* Partial file corruption
+
+Does NOT protect against:
+
+* Compromised operating system
+* Keylogging malware
+* Memory scraping attacks on live system
+
+---
+
+# 🧪 Recommended Testing
+
+* Encrypt/decrypt round-trip tests
+* Wrong password failure tests
+* Tamper detection tests
+* Truncated file tests
+* Large file testing
+
+---
+
+# 📌 Notes
+
+Threefish is a less commonly deployed cipher compared to AES. It is well analyzed but not standardized in mainstream protocols.
+
+This project is ideal for educational depth and advanced cryptographic exploration.
+
+---
+
+# ⚠ Important
+
+This software has not undergone a formal cryptographic audit.
+
+If protecting extremely sensitive or regulated data, a professional audit is recommended.
+
+---
+
+# License
+
+MIT (or choose your preferred license)

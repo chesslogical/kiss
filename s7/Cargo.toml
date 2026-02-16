@@ -1,8 +1,7 @@
 [package]
-name = "threefish_encrypt"
+name = "threefish1024"
 version = "0.1.0"
 edition = "2021"
-
 [dependencies]
 threefish = "0.5"
 cipher = "0.4"
@@ -11,3 +10,7 @@ anyhow = "1.0"
 rand = "0.8"
 hmac = "0.12"
 sha2 = "0.10"
+argon2 = "0.5"
+hkdf = "0.12"
+zeroize = "1.7"
+rpassword = "7"
