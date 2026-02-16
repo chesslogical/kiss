@@ -41,7 +41,7 @@ chmod 600 1.key  # Recommended for security
 
 
 
-Limitations
+# Limitations
 
   Files must be in the current working directory (no paths allowed).
   Cannot operate on directories, the key file itself, or special dirs like ./...
@@ -58,7 +58,7 @@ Limitations
 If issues arise (e.g., decryption failures), check key validity and file integrity.
 
 
-#License
+# License
 
  Do as you wish. 
 
