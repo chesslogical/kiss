@@ -58,7 +58,8 @@ Limitations
 If issues arise (e.g., decryption failures), check key validity and file integrity.
 
 
-License
+#License
+
  Do as you wish. 
 
 
