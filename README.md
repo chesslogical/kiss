@@ -11,9 +11,11 @@ Made ONLY for linux. That is because atomic overwrite options are a bit differen
 
 
 
-s1 and s2  AES-256-GCM-SIV
+s1 AES-256-GCM-SIV key file 
 
-s3 xor transformer otp like 
+s2  AES-256-GCM-SIV password version
+
+s3 xor transformer otp operations
 
 
 s4 Algorithm Choice: XChaCha20-Poly1305 is secure for file encryption (IND-CCA2 secure, resistant to nonce misuse due to extended nonce). uses key
