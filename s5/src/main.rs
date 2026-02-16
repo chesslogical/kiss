@@ -13,6 +13,7 @@ use argon2::{Argon2, Algorithm, Version, Params};
 use rpassword;
 
 // ---------- Constants ----------
+// Magic bytes for identification, including version.
 const MAGIC: [u8; 8] = *b"SPSv2\0\0\0"; // Version 2 magic
 const SALT_LEN: usize = 16; // Salt for key derivation
 const BASE_LEN: usize = 16; // Base for nonce derivation
@@ -34,8 +35,10 @@ fn atomic_replace(temp: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn derive_key(password: &[u8], salt: &[u8]) -> Result<[u8; KEY_LEN]> {
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::default());
+fn derive_key(password: &[u8], salt: &[u8], iterations: u32, memory: u32, parallelism: u32) -> Result<[u8; KEY_LEN]> {
+    let params = Params::new(memory * 1024, iterations, parallelism, Some(KEY_LEN))
+        .map_err(|e| anyhow!("Invalid Argon2 parameters: {}", e))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; KEY_LEN];
     argon2.hash_password_into(password, salt, &mut key)
         .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
@@ -43,7 +46,14 @@ fn derive_key(password: &[u8], salt: &[u8]) -> Result<[u8; KEY_LEN]> {
 }
 
 // ---------- Encryption ----------
-fn encrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()> {
+/// Encrypts the file in-place using XChaCha20-Poly1305 with a password-derived key.
+/// 
+/// - Generates random salt and nonce base.
+/// - Derives key using Argon2id.
+/// - Encrypts in chunks with unique nonces (base + chunk index).
+/// - AAD for each chunk includes the full header and chunk index to bind chunks and prevent reordering.
+/// - Uses atomic replacement via temp file for safety.
+fn encrypt_file(input_path: &Path, output_path: &Path, password: &[u8], verbose: bool, iterations: u32, memory: u32, parallelism: u32) -> Result<()> {
     let mut file = File::open(input_path).context(format!("Failed to open input file {}", input_path.display()))?;
     file.lock_exclusive()?;
     let orig_len = file.metadata()?.len();
@@ -54,15 +64,16 @@ fn encrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()>
     OsRng.fill_bytes(&mut salt);
     let mut base = [0u8; BASE_LEN];
     OsRng.fill_bytes(&mut base);
-    let mut key = derive_key(password, &salt)?;
+    let mut key = derive_key(password, &salt, iterations, memory, parallelism)?;
     let aead = XChaCha20Poly1305::new_from_slice(&key).map_err(|e| anyhow!("Invalid key length: {}", e))?;
     let mut reader = BufReader::new(&mut file);
-    let tmp = temp_path_near(input_path);
+    let is_in_place = input_path == output_path;
+    let tmp = if is_in_place { temp_path_near(input_path) } else { output_path.to_path_buf() };
     let mut out_file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(&tmp)
-        .context(format!("Failed to create temp file {}", tmp.display()))?;
+        .context(format!("Failed to create output file {}", tmp.display()))?;
     out_file.lock_exclusive()?;
     let mut writer = BufWriter::new(&mut out_file);
     // Write header
@@ -103,7 +114,7 @@ fn encrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()>
         processed += n as u64;
         chunk_idx += 1;
         if verbose {
-            trace!("Encrypted chunk {} ({} bytes)", chunk_idx, n);
+            trace!("Encrypted chunk {} ({} bytes) - Progress: {:.2}%", chunk_idx, n, (processed as f64 / orig_len as f64) * 100.0);
         }
     }
     if processed != orig_len {
@@ -114,12 +125,22 @@ fn encrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()>
     writer.flush()?;
     drop(writer);
     key.zeroize();
-    atomic_replace(&tmp, input_path)?;
+    if is_in_place {
+        atomic_replace(&tmp, input_path)?;
+    }
     Ok(())
 }
 
 // ---------- Decryption ----------
-fn decrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()> {
+/// Decrypts the file in-place using XChaCha20-Poly1305 with a password-derived key.
+/// 
+/// - Reads and validates header (magic, salt, base, orig_len).
+/// - Derives key using Argon2id.
+/// - Decrypts in chunks, verifying AEAD tags (fails on wrong password or corruption).
+/// - AAD for each chunk includes the full header and chunk index.
+/// - Checks for exact original length and no extra data.
+/// - Uses atomic replacement via temp file for safety.
+fn decrypt_file(input_path: &Path, output_path: &Path, password: &[u8], verbose: bool, iterations: u32, memory: u32, parallelism: u32) -> Result<()> {
     let mut file = File::open(input_path).context(format!("Failed to open input file {}", input_path.display()))?;
     file.lock_exclusive()?;
     let total_len = file.metadata()?.len();
@@ -142,14 +163,16 @@ fn decrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()>
             .try_into()
             .map_err(|_| anyhow!("Invalid original length"))?,
     );
-    let mut key = derive_key(password, &salt)?;
+    let mut key = derive_key(password, &salt, iterations, memory, parallelism)?;
     let aead = XChaCha20Poly1305::new_from_slice(&key).map_err(|e| anyhow!("Invalid key length: {}", e))?;
-    let tmp = temp_path_near(input_path);
+    let mut reader = BufReader::new(&mut file);
+    let is_in_place = input_path == output_path;
+    let tmp = if is_in_place { temp_path_near(input_path) } else { output_path.to_path_buf() };
     let mut out_file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(&tmp)
-        .context(format!("Failed to create temp file {}", tmp.display()))?;
+        .context(format!("Failed to create output file {}", tmp.display()))?;
     out_file.lock_exclusive()?;
     let mut writer = BufWriter::new(&mut out_file);
     let mut inbuf = vec![0u8; CHUNK + TAG_LEN];
@@ -161,9 +184,11 @@ fn decrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()>
             break;
         }
         let to_read = expected_plaintext_len + TAG_LEN;
-        let n = file.read(&mut inbuf[..to_read])?;
+        let n = reader.read(&mut inbuf[..to_read])?;
         if n != to_read {
-            return Err(anyhow!("Incomplete read during decryption (expected {}, got {})", to_read, n));
+            drop(writer);
+            let _ = fs::remove_file(&tmp);
+            return Err(anyhow!("Incomplete read during decryption (expected {}, got {}) - possible corrupted or truncated container", to_read, n));
         }
         let nonce = {
             let mut nb = [0u8; 24];
@@ -181,18 +206,22 @@ fn decrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()>
         let plaintext = aead.decrypt(XNonce::from_slice(&nonce), payload)
             .map_err(|_| anyhow!("Decryption failed: wrong password or corrupted file (chunk {})", chunk_idx))?;
         if plaintext.len() != expected_plaintext_len {
+            drop(writer);
+            let _ = fs::remove_file(&tmp);
             return Err(anyhow!("Decrypted chunk length mismatch (expected {}, got {})", expected_plaintext_len, plaintext.len()));
         }
         writer.write_all(&plaintext)?;
         processed += expected_plaintext_len as u64;
         chunk_idx += 1;
         if verbose {
-            trace!("Decrypted chunk {} ({} bytes)", chunk_idx, expected_plaintext_len);
+            trace!("Decrypted chunk {} ({} bytes) - Progress: {:.2}%", chunk_idx, expected_plaintext_len, (processed as f64 / orig_len as f64) * 100.0);
         }
     }
     writer.flush()?;
     let decrypted_len = writer.get_ref().metadata()?.len();
     if decrypted_len != orig_len {
+        drop(writer);
+        let _ = fs::remove_file(&tmp);
         return Err(anyhow!("Final length mismatch (expected {}, got {})", orig_len, decrypted_len));
     }
     let current_pos = file.stream_position()?;
@@ -203,7 +232,9 @@ fn decrypt_file(input_path: &Path, password: &[u8], verbose: bool) -> Result<()>
     }
     drop(writer);
     key.zeroize();
-    atomic_replace(&tmp, input_path)?;
+    if is_in_place {
+        atomic_replace(&tmp, input_path)?;
+    }
     Ok(())
 }
 
@@ -220,12 +251,34 @@ enum ForceMode {
 struct Cli {
     /// The filename to process
     filename: String,
+
+    /// Output filename (defaults to input for in-place)
+    #[arg(long)]
+    output: Option<String>,
+
     /// Force operation (encrypt or decrypt)
     #[arg(long, value_enum)]
     force: Option<ForceMode>,
+
     /// Enable verbose logging
     #[arg(long)]
     verbose: bool,
+
+    /// Argon2 iterations (default: 2)
+    #[arg(long, default_value_t = 2)]
+    iterations: u32,
+
+    /// Argon2 memory in MiB (default: 19)
+    #[arg(long, default_value_t = 19)]
+    memory: u32,
+
+    /// Argon2 parallelism (default: 1)
+    #[arg(long, default_value_t = 1)]
+    parallelism: u32,
+
+    /// Confirm password on encryption (default: true)
+    #[arg(long, default_value_t = true)]
+    confirm_password: bool,
 }
 
 fn main() -> Result<()> {
@@ -233,34 +286,127 @@ fn main() -> Result<()> {
     env_logger::builder()
         .filter_level(if cli.verbose { log::LevelFilter::Trace } else { log::LevelFilter::Warn })
         .init();
-    let password = rpassword::prompt_password("Enter password: ")?;
-    let mut pw_bytes = password.into_bytes();
+
     let filename = cli.filename.trim();
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") || filename.starts_with('.') {
         return Err(anyhow!("Invalid filename: paths and hidden files not allowed"));
     }
-    let path = PathBuf::from(filename);
-    if !path.exists() || !path.is_file() {
+    let input_path = PathBuf::from(filename);
+    if !input_path.exists() || !input_path.is_file() {
         return Err(anyhow!("File does not exist or is not a regular file: {}", filename));
     }
-    let mut file = File::open(&path)?;
+
+    let output_path = cli.output.map(PathBuf::from).unwrap_or_else(|| input_path.clone());
+
+    let mut file = File::open(&input_path)?;
     let mut magic_buf = [0u8; MAGIC.len()];
     let read_bytes = file.read(&mut magic_buf)?;
     let has_magic = read_bytes == MAGIC.len() && magic_buf == MAGIC;
     drop(file);
+
     let should_encrypt = match cli.force {
         Some(ForceMode::Encrypt) => true,
         Some(ForceMode::Decrypt) => false,
         None => !has_magic,
     };
+
+    let mut password = rpassword::prompt_password("Enter password: ")?;
+
     if should_encrypt {
-        info!("Encrypting file: {}", path.display());
-        encrypt_file(&path, &pw_bytes, cli.verbose)?;
+        if cli.confirm_password {
+            let mut confirm = rpassword::prompt_password("Confirm password: ")?;
+            if password != confirm {
+                password.zeroize();
+                confirm.zeroize();
+                return Err(anyhow!("Passwords don't match"));
+            }
+            confirm.zeroize();
+        }
+        info!("Encrypting file: {} -> {}", input_path.display(), output_path.display());
     } else {
-        info!("Decrypting file: {}", path.display());
-        decrypt_file(&path, &pw_bytes, cli.verbose)?;
+        info!("Decrypting file: {} -> {}", input_path.display(), output_path.display());
     }
+
+    let pw_bytes = password.into_bytes();
+    let mut pw_bytes = pw_bytes; // mut for zeroize
+
+    let res = if should_encrypt {
+        encrypt_file(&input_path, &output_path, &pw_bytes, cli.verbose, cli.iterations, cli.memory, cli.parallelism)
+    } else {
+        decrypt_file(&input_path, &output_path, &pw_bytes, cli.verbose, cli.iterations, cli.memory, cli.parallelism)
+    };
+
     pw_bytes.zeroize();
+
+    res?;
+
     println!("ok");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_test_file(content: &[u8]) -> Result<NamedTempFile> {
+        let mut file = NamedTempFile::new()?;
+        file.write_all(content)?;
+        file.flush()?;
+        Ok(file)
+    }
+
+    #[test]
+    fn test_derive_key() -> Result<()> {
+        let password = b"testpass";
+        let salt = [0u8; SALT_LEN];
+        let key = derive_key(password, &salt, 2, 19, 1)?;
+        assert_eq!(key.len(), KEY_LEN);
+        Ok(())
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_small() -> Result<()> {
+        let content = b"Hello, world!";
+        let file = create_test_file(content)?;
+        let path = file.path().to_path_buf();
+        let pw = b"password";
+        encrypt_file(&path, &path, pw, false, 2, 19, 1)?;
+        decrypt_file(&path, &path, pw, false, 2, 19, 1)?;
+        let mut decrypted = Vec::new();
+        let mut f = File::open(&path)?;
+        f.read_to_end(&mut decrypted)?;
+        assert_eq!(decrypted, content);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decrypt_wrong_password() -> Result<()> {
+        let content = b"Hello, world!";
+        let file = create_test_file(content)?;
+        let path = file.path().to_path_buf();
+        let pw = b"password";
+        encrypt_file(&path, &path, pw, false, 2, 19, 1)?;
+        let wrong_pw = b"wrong";
+        let result = decrypt_file(&path, &path, wrong_pw, false, 2, 19, 1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Decryption failed"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_empty_file() -> Result<()> {
+        let content = b"";
+        let file = create_test_file(content)?;
+        let path = file.path().to_path_buf();
+        let pw = b"password";
+        encrypt_file(&path, &path, pw, false, 2, 19, 1)?;
+        decrypt_file(&path, &path, pw, false, 2, 19, 1)?;
+        let mut decrypted = Vec::new();
+        let mut f = File::open(&path)?;
+        f.read_to_end(&mut decrypted)?;
+        assert_eq!(decrypted, content);
+        Ok(())
+    }
 }
