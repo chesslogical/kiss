@@ -21,3 +21,5 @@ s3 xor transformer otp operations
 s4 Algorithm Choice: XChaCha20-Poly1305 is secure for file encryption (IND-CCA2 secure, resistant to nonce misuse due to extended nonce). uses key
 
 s5 password version of s4 
+
+s6 threefish 256 algo 
