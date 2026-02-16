@@ -25,3 +25,5 @@ s5 password version of s4
 s6 threefish 256 algo uses key file 
 
 s7 threefish 1024 algo uses key file 
+
+s8 it is s7 in password mode
