@@ -22,4 +22,4 @@ s4 Algorithm Choice: XChaCha20-Poly1305 is secure for file encryption (IND-CCA2 
 
 s5 password version of s4 
 
-s6 threefish 256 algo 
+s6 threefish 256 algo uses key file 
