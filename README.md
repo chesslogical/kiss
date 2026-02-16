@@ -31,4 +31,4 @@ s7 threefish 1024 algo uses key file
 
 s8 it is s7 in password mode
 
-s9 it is s7 but key is hard coded at compile time. Key is editable at compile time, which makes the app versatile. 
+s9 it is s7 but key is hard coded. Key is editable at compile time, which makes the app versatile. 
