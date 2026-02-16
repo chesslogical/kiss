@@ -13,6 +13,7 @@ Modern high security algos !!  The code in here would take someone an incredible
 
 The code is simple but incredibly powerful. It is decent- very much so as is- but it is made to be flexible, able to be updated easily. I do not think one could ask for more from an encryption app. 
 
+I do NOT do version control i just overwrite to make edits. 
 
 
 s1 AES-256-GCM-SIV key file 
