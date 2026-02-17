@@ -1,5 +1,3 @@
-Here’s a clean, professional `README.md` you can use for your project.
-
 ---
 
 # SecureApp
