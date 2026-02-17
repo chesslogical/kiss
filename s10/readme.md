@@ -128,10 +128,4 @@ SecureApp prioritizes:
 
 ---
 
-If you’d like, I can also generate:
 
-* A more “polished open-source” version
-* A security-focused technical README
-* Or a minimal short version for GitHub
-
-Just tell me the vibe you want.
