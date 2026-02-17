@@ -33,3 +33,6 @@ s7 threefish 1024 algo uses key file
 s8 it is s7 in password mode
 
 s9 it is s7 but key is hard coded. Key is editable at compile time, which makes the app versatile. 
+
+s10 requires enc or dec before file name. this is for double encryption for rare edge cases like file shredding. 
+
