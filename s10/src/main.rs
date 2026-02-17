@@ -47,6 +47,9 @@ pub enum SecureAppError {
 
     #[error("Usage: secureapp E <file> | secureapp D <file>")]
     Usage,
+
+    #[error("Passwords do not match")]
+    PasswordMismatch,
 }
 
 fn main() -> Result<(), SecureAppError> {
@@ -77,23 +80,41 @@ fn process_file(path: &Path, encrypt: bool) -> Result<(), SecureAppError> {
     let tmp_path = path.with_extension("secureapp.tmp");
     let backup_path = path.with_extension("secureapp.bak");
 
-    if encrypt {
-        encrypt_to(path, &tmp_path)?;
+    // Remove leftover temp if exists
+    let _ = fs::remove_file(&tmp_path);
+
+    let result = if encrypt {
+        encrypt_to(path, &tmp_path)
     } else {
-        decrypt_to(path, &tmp_path)?;
+        decrypt_to(path, &tmp_path)
+    };
+
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+        return result;
     }
 
     fs::rename(path, &backup_path)?;
-    fs::rename(&tmp_path, path)?;
 
-    fs::remove_file(backup_path)?;
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        // restore original
+        let _ = fs::rename(&backup_path, path);
+        return Err(e.into());
+    }
+
+    let _ = fs::remove_file(&backup_path);
 
     Ok(())
 }
 
 fn derive_key(password: &mut String, salt: &[u8]) -> Result<[u8; KEY_LEN], SecureAppError> {
-    let params = Params::new(64 * 1024, 3, 1, None)
-        .map_err(|e| SecureAppError::Argon2(e.to_string()))?;
+    let params = Params::new(
+        128 * 1024, // 128 MiB
+        4,          // iterations
+        1,
+        None,
+    )
+    .map_err(|e| SecureAppError::Argon2(e.to_string()))?;
 
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
 
@@ -114,15 +135,30 @@ fn encrypt_to(input_path: &Path, output_path: &Path) -> Result<(), SecureAppErro
     println!("Enter password:");
     let mut password = read_password()?;
 
+    println!("Confirm password:");
+    let mut confirm = read_password()?;
+
+    if password != confirm {
+        password.zeroize();
+        confirm.zeroize();
+        return Err(SecureAppError::PasswordMismatch);
+    }
+
+    confirm.zeroize();
+
     let mut salt = [0u8; SALT_LEN];
     rand::thread_rng().fill_bytes(&mut salt);
 
     let key = derive_key(&mut password, &salt)?;
     let cipher = XChaCha20Poly1305::new(&key.into());
 
-    output.write_all(MAGIC)?;
-    output.write_all(&[VERSION])?;
-    output.write_all(&salt)?;
+    // Build full header
+    let mut header = Vec::new();
+    header.extend_from_slice(MAGIC);
+    header.push(VERSION);
+    header.extend_from_slice(&salt);
+
+    output.write_all(&header)?;
 
     let mut buffer = vec![0u8; CHUNK_SIZE];
     let mut nonce_counter: u64 = 0;
@@ -142,7 +178,7 @@ fn encrypt_to(input_path: &Path, output_path: &Path) -> Result<(), SecureAppErro
                 nonce,
                 Payload {
                     msg: &buffer[..read_bytes],
-                    aad: MAGIC,
+                    aad: &header,
                 },
             )
             .map_err(|_| SecureAppError::CryptoEncrypt)?;
@@ -162,24 +198,22 @@ fn decrypt_to(input_path: &Path, output_path: &Path) -> Result<(), SecureAppErro
     let mut input = BufReader::new(File::open(input_path)?);
     let mut output = BufWriter::new(File::create(output_path)?);
 
-    let mut magic = [0u8; 8];
-    input.read_exact(&mut magic)?;
-    if &magic != MAGIC {
+    let mut header = vec![0u8; MAGIC.len() + 1 + SALT_LEN];
+    input.read_exact(&mut header)?;
+
+    if &header[..MAGIC.len()] != MAGIC {
         return Err(SecureAppError::InvalidFormat);
     }
 
-    let mut version = [0u8; 1];
-    input.read_exact(&mut version)?;
-    if version[0] != VERSION {
+    if header[MAGIC.len()] != VERSION {
         return Err(SecureAppError::UnsupportedVersion);
     }
 
-    let mut salt = [0u8; SALT_LEN];
-    input.read_exact(&mut salt)?;
+    let salt = &header[MAGIC.len() + 1..];
 
     println!("Enter password:");
     let mut password = read_password()?;
-    let key = derive_key(&mut password, &salt)?;
+    let key = derive_key(&mut password, salt)?;
     let cipher = XChaCha20Poly1305::new(&key.into());
 
     let mut nonce_counter: u64 = 0;
@@ -211,7 +245,7 @@ fn decrypt_to(input_path: &Path, output_path: &Path) -> Result<(), SecureAppErro
                 nonce,
                 Payload {
                     msg: &encrypted,
-                    aad: MAGIC,
+                    aad: &header,
                 },
             )
             .map_err(|_| SecureAppError::CryptoDecrypt)?;

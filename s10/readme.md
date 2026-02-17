@@ -1,24 +1,25 @@
----
-
 # SecureApp
 
-SecureApp is a minimal, safety-focused file encryption tool written in Rust.
+SecureApp is a safety-focused file encryption tool written in Rust.
 
-It provides safe in-place encryption and decryption using modern, authenticated cryptography with strong corruption protections.
+It provides secure, in-place encryption and decryption using modern authenticated cryptography, strong password hardening, and atomic file replacement to prevent corruption or data loss.
 
 ---
 
 ## Features
 
-* In-place encryption and decryption
-* Atomic file replacement (no partial overwrite corruption)
-* Automatic backup during processing
-* Authenticated encryption (AEAD)
-* Chunked processing (large file safe)
-* Memory-hard password derivation (Argon2id)
-* Password input hidden from terminal
-* No silent truncation or partial reads
-* Strict format validation
+- In-place encryption and decryption
+- Atomic file replacement (no partial overwrite corruption)
+- Automatic backup + restore on failure
+- Temporary file cleanup on errors
+- Authenticated encryption (AEAD)
+- Full header authentication (magic + version + salt)
+- Memory-hard password derivation (Argon2id)
+- Password confirmation during encryption
+- Chunked processing (large file safe)
+- Strict chunk validation
+- Password memory zeroization
+- No unwraps or panics in crypto path
 
 ---
 
@@ -31,8 +32,8 @@ secureapp D <file>
 
 Uppercase required:
 
-* `E` → Encrypt
-* `D` → Decrypt
+- `E` → Encrypt file in place
+- `D` → Decrypt file in place
 
 Examples:
 
@@ -45,46 +46,56 @@ secureapp D document.pdf
 
 ## How It Works
 
-Encryption:
+Encryption process:
 
-1. Creates a temporary file.
-2. Encrypts the original file into the temp file.
-3. Flushes and finalizes output.
-4. Renames the original to a backup.
-5. Atomically replaces the original with the encrypted file.
-6. Removes the backup after success.
+1. Prompts for password.
+2. Requires password confirmation.
+3. Creates a temporary file.
+4. Encrypts the original file into the temp file.
+5. Flushes and finalizes output.
+6. Renames the original file to a backup.
+7. Atomically replaces the original with the encrypted file.
+8. Removes the backup after success.
 
-Decryption follows the same process in reverse.
+If any step fails:
+- The original file remains intact.
+- Temporary files are cleaned up.
 
-If anything fails, the original file remains intact.
+Decryption follows the same atomic safety process.
 
 ---
 
 ## Cryptography
 
-* Cipher: XChaCha20-Poly1305 (AEAD)
-* Key derivation: Argon2id
-* Per-file random salt
-* Per-chunk nonce derivation
-* Authenticated header validation
+- Cipher: XChaCha20-Poly1305 (AEAD)
+- Key derivation: Argon2id
+- Argon2 memory cost: 128 MiB
+- Argon2 iterations: 4
+- Per-file random salt
+- Per-chunk nonce derivation
+- Full header used as Additional Authenticated Data (AAD)
 
-Each chunk is authenticated to prevent tampering.
+All encrypted chunks are authenticated.  
+Any tampering, corruption, or wrong password causes decryption to fail safely.
 
 ---
 
-## Security Notes
+## Security Design Goals
 
-* Wrong password will fail safely.
-* Corrupted files will not partially decrypt.
-* Chunk sizes are validated to prevent memory abuse.
-* No unwraps or panics in crypto path.
-* Password memory is zeroized after use.
+SecureApp prioritizes:
+
+- Data safety over convenience
+- Atomic operations
+- Explicit failure handling
+- No silent data loss
+- Strong password hardening
+- Minimal attack surface
 
 ---
 
 ## Build
 
-Requires Rust 1.70+ (recommended stable).
+Requires stable Rust (1.70+ recommended).
 
 ```
 cargo build --release
@@ -98,34 +109,31 @@ target/release/secureapp
 
 ---
 
-## Design Philosophy
-
-SecureApp prioritizes:
-
-* Data safety over convenience
-* Atomic operations
-* Explicit failure handling
-* No silent data loss
-* Minimal attack surface
-
----
-
 ## Limitations
 
-* Single-file encryption only
-* Password-based encryption only
-* No key files or public key support (yet)
+- Single-file encryption only
+- Password-based encryption only
+- No keyfile or public key support (yet)
 
 ---
 
-## Future Ideas
+## Future Improvements
 
-* Keyfile support
-* Directory mode
-* Secure wipe option
-* Crash recovery detection
-* File format versioning upgrades
+- Optional high-security mode (256 MiB Argon2)
+- Keyfile support
+- Directory mode
+- Secure wipe option
+- Crash consistency with fsync
+- Integration tests
 
 ---
 
+## Warning
 
+If you forget your password, your data cannot be recovered.
+
+There is no backdoor.
+There is no recovery mechanism.
+There is no password reset.
+
+Choose carefully.
