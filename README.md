@@ -39,4 +39,4 @@ s10 requires enc or dec before file name. this is for double encryption for rare
 s11
 
 s12 uses serpent algo 
-
+s13- a more hardened version of s12
