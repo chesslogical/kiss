@@ -36,3 +36,7 @@ s9 it is s7 but key is hard coded. Key is editable at compile time, which makes 
 
 s10 requires enc or dec before file name. this is for double encryption for rare edge cases like file shredding. 
 
+s11
+
+s12 uses serpent algo 
+
