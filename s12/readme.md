@@ -1,6 +1,6 @@
 
 
-```markdown
+
 # serpent2
 
 **Simple, reliable, Linux-only command-line file encryptor using Serpent-256**
