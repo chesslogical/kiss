@@ -7,7 +7,7 @@ Each folder is its own app.
 
 Most have ONE command (the file name to encrypt) . Automatically encrypts or decrypts the file in place. 
 
-Made ONLY for linux. That is because atomic overwrite options are a bit different in linux than windows or mac.
+Made ONLY for linux. That is because atomic overwrite operations are a bit different in linux than windows or mac.
 
 Modern high security algos !!  The code in here would take someone an incredible level of skill and lots of time to dev- ai made each app in about 15 minutes each on average, i just fed back the error messages till it passed the strict rust compiler. A few years ago, one could only dream of a repo like this. Code is in main.rs in every app, so it is incredibly easy to feed to ai to audit and update. 
 
