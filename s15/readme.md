@@ -8,7 +8,7 @@ It can:
 * with no repeating pattern
 * while streaming (no giant allocations)
 
-We’ll design this properly.
+This is designed properly.
 
 ---
 
