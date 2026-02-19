@@ -42,5 +42,5 @@ s12 uses serpent algo
 
 s13 key maker
 
-s14 anothe key maker
+s14 another key maker
 
