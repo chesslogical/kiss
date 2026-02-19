@@ -1,6 +1,6 @@
 
 
-# detkey
+# detkey 8
 
 A small, deterministic key generation tool.
 
