@@ -3,9 +3,10 @@
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
+use libc;
 use sodiumoxide::crypto::secretstream::{Header, Key, Stream, Tag, ABYTES, HEADERBYTES, KEYBYTES};
 use sodiumoxide::utils::memzero;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -63,7 +64,17 @@ fn encrypt(file: &str, key: &Key) -> Result<()> {
     let temp_path = get_temp_path(path);
 
     let result = (|| -> Result<()> {
-        let input_file = File::open(path).context("Failed to open input file")?;
+        let input_file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .context("Failed to open input file")?;
+
+        let metadata = input_file.metadata().context("Failed to get file metadata")?;
+        if !metadata.is_file() {
+            return Err(anyhow!("Target must be a regular file"));
+        }
+
         let mut input = BufReader::new(input_file);
 
         let output_file = OpenOptions::new()
@@ -116,7 +127,17 @@ fn decrypt(file: &str, key: &Key) -> Result<()> {
     let temp_path = get_temp_path(path);
 
     let result = (|| -> Result<()> {
-        let input_file = File::open(path).context("Failed to open input file")?;
+        let input_file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .context("Failed to open input file")?;
+
+        let metadata = input_file.metadata().context("Failed to get file metadata")?;
+        if !metadata.is_file() {
+            return Err(anyhow!("Target must be a regular file"));
+        }
+
         let mut input = BufReader::new(input_file);
 
         let output_file = OpenOptions::new()
