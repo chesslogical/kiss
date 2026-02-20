@@ -42,7 +42,9 @@ s12 uses serpent algo
 
 s13 to s16 awesome key makers 
 
-s17  a stand out for sure 
+s17 nice
+
+s18 sodiumoxide 
 
 
 
