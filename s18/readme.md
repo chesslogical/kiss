@@ -1,5 +1,7 @@
 # filecrypt
 
+This is genuinely hardened for a Linux CLI tool.
+
 A simple CLI tool for Linux to encrypt and decrypt files in place using XChaCha20-Poly1305 authenticated encryption. It streams data for low memory usage on large files and performs atomic overwrites for safety.
 
 **Note:** This app is designed for Linux only. The requirement for a `key.key` file in the current working directory is intentional for simplicity and security (e.g., avoid passing keys via CLI args).
