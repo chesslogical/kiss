@@ -69,6 +69,7 @@ fn encrypt(file: &str, key: &Key) -> Result<()> {
         let output_file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .mode(0o600)
             .open(&temp_path)
             .context("Failed to create temp file")?;
@@ -121,6 +122,7 @@ fn decrypt(file: &str, key: &Key) -> Result<()> {
         let output_file = OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .mode(0o600)
             .open(&temp_path)
             .context("Failed to create temp file")?;
@@ -144,6 +146,10 @@ fn decrypt(file: &str, key: &Key) -> Result<()> {
                 return Err(anyhow!("Incomplete length prefix"));
             }
             let plain_len = u32::from_le_bytes(len_buf) as usize;
+
+            if plain_len > CHUNK_SIZE {
+                return Err(anyhow!("Frame too large"));
+            }
 
             let ct_len = plain_len + ABYTES;
             if ct_len > ct.len() {
