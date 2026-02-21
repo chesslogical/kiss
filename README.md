@@ -9,7 +9,7 @@ Most have ONE command (the file name to encrypt) . Automatically encrypts or dec
 
 Made ONLY for linux. That is because atomic overwrite operations are a bit different in linux than windows or mac.
 
-Modern high security algos !!  The code in here would take someone an incredible level of skill and lots of time to dev- ai made each app in about 15 minutes each on average, i just fed back the error messages till it passed the strict rust compiler. A few years ago, one could only dream of a repo like this. Code is in main.rs in every app, so it is incredibly easy to feed to ai to audit and update. 
+Modern high security algos.  The code in here would take someone an incredible level of skill and lots of time to dev- ai made each app in about 15 minutes each on average, i just fed back the error messages till it passed the strict rust compiler. Then i fed the app to an entirely different ai and told it to be highly critical. Then i fed the audit to the original ai and told it to fix the things it agrees with. 
 
 The code is simple but incredibly powerful. It is decent- very much so as is- but it is made to be flexible, able to be updated easily. I do not think one could ask for more from an encryption app. 
 
